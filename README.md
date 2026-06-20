@@ -1,6 +1,6 @@
 # CodeCoach
 
-A coding-education platform built to answer one research question: **do LLM-generated hints help students without giving the solution away?** It pairs a real sandboxed autograder with an LLM hint engine, an automated answer-leakage ("over-hinting") detector, multi-signal plagiarism detection, an instructor dashboard, and a self-contained analysis harness that computes the agreement and effect-size statistics a SIGCSE/ICER/AIED submission needs.
+A coding-education platform built to answer one research question: **do LLM-generated hints help students without giving the solution away?** It pairs a real sandboxed autograder with an LLM hint engine, an automated answer-leakage ("over-hinting") detector, multi-signal plagiarism detection, an instructor dashboard, and a self-contained analysis harness that computes the agreement.
 
 Everything runs offline with no API key (heuristic hints, degraded-but-real sandbox). Add an Anthropic key to switch on the LLM treatment condition. No build step, no external services, SQLite for storage.
 
