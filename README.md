@@ -80,6 +80,12 @@ The statistics module is pure Python (no numpy/scipy) and validated against know
 ## Running it
 
 ```bash
+cd D:\3.Projects\CodeCoach
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m app.seed
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 make install            # pip install -r requirements.txt
 make run                # seeds if empty, starts the server on :8000
 ```
