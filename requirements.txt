@@ -1,0 +1,17 @@
+# Core web stack
+fastapi==0.137.2
+uvicorn[standard]==0.49.0
+sqlmodel==0.0.38
+jinja2==3.1.6
+python-multipart==0.0.32
+pydantic==2.13.4
+
+# Optional: real LLM hints/feedback + leakage judge.
+# The platform runs fully without this (heuristic fallback); install it and set
+# ANTHROPIC_API_KEY to enable the LLM treatment condition.
+anthropic==0.111.0
+
+# Dev / study
+pytest==9.1.1
+# Optional: PNG charts in study reports. Reports degrade to CSV-only if absent.
+matplotlib==3.10.8

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCoach</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="statusbar" id="statusbar"><span class="brand">code<b>coach</b></span></div>
+
+<div class="wrap narrow">
+  <div class="panel">
+    <div class="eyebrow">automated judge · ai hints · plagiarism · research console</div>
+    <h2 style="font-size:20px;margin-top:8px;">Sign in</h2>
+    <p class="muted small">Paste your access token. Tokens are issued by the seed
+      script (see README) and identify you as a student or an instructor.</p>
+
+    <div class="field">
+      <label for="tok">Access token</label>
+      <input id="tok" placeholder="e.g. stu-ada-001 / ins-grace-001" autocomplete="off">
+    </div>
+    <div class="btnrow">
+      <button class="primary" onclick="signIn()">Sign in</button>
+      <span id="who" class="kv"></span>
+    </div>
+    <div id="err"></div>
+
+    <hr class="sep">
+    <h3>Go to</h3>
+    <div class="btnrow">
+      <a class="btn" href="/student">Student workspace</a>
+      <a class="btn" href="/instructor">Instructor dashboard</a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>What this is</h3>
+    <p class="small">A coding-education platform built around a research question:
+      <b>do LLM hints help students without giving the solution away?</b>
+      Students submit code; a sandboxed runner grades it against hidden tests and
+      returns a per-test verdict strip. The AI hint engine produces progressive,
+      solution-aware-but-not-revealing hints, and an over-hinting detector measures
+      how much each hint leaks. Instructors rate hint helpfulness and correctness
+      against a baseline of raw compiler errors, and grade submissions by hand so
+      autograder agreement can be measured.</p>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+CC.loadStatusBar("statusbar");
+const t = CC.getToken();
+if (t) document.getElementById("tok").value = t;
+
+async function signIn() {
+  const tok = document.getElementById("tok").value.trim();
+  const err = document.getElementById("err");
+  err.innerHTML = "";
+  if (!tok) { err.innerHTML = '<div class="notice err mt">Enter a token.</div>'; return; }
+  CC.setToken(tok);
+  try {
+    const me = await CC.api("/api/whoami");
+    document.getElementById("who").innerHTML =
+      `signed in as <b>${CC.esc(me.username)}</b> (${me.role})`;
+    setTimeout(() => {
+      window.location.href = (me.role === "instructor" || me.role === "admin")
+        ? "/instructor" : "/student";
+    }, 450);
+  } catch (e) {
+    CC.clearToken();
+    err.innerHTML = `<div class="notice err mt">${CC.esc(e.message)}</div>`;
+  }
+}
+</script>
+</body>
+</html>

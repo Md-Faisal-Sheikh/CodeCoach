@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCoach — Instructor</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="statusbar" id="statusbar"><span class="brand">code<b>coach</b></span></div>
+
+<div class="wrap">
+  <div class="row-between mb">
+    <div class="eyebrow">instructor dashboard</div>
+    <div class="btnrow">
+      <span id="whoami" class="kv"></span>
+      <a class="btn ghost" href="/">Sign out</a>
+    </div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-pane="overview">Overview</button>
+    <button class="tab" data-pane="submissions">Submissions</button>
+    <button class="tab" data-pane="hints">Rate hints</button>
+    <button class="tab" data-pane="grading">Human grading</button>
+    <button class="tab" data-pane="similarity">Similarity</button>
+    <button class="tab" data-pane="research">Research</button>
+  </div>
+
+  <div id="overview" class="tabpane active">
+    <div class="panel"><h3>Totals</h3><div id="tiles" class="tiles"></div></div>
+    <div class="panel"><h3>Per-problem</h3>
+      <div class="table-scroll"><table id="probTable"><thead><tr>
+        <th>Problem</th><th>Lang</th><th>Diff</th><th class="num">Subs</th>
+        <th class="num">Passed</th><th class="num">Pass rate</th><th class="num">Mean score</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <div id="submissions" class="tabpane">
+    <div class="panel">
+      <div class="row-between mb"><h3 style="margin:0">All submissions</h3>
+        <button class="ghost" onclick="loadSubmissions()">Refresh</button></div>
+      <div class="table-scroll"><table id="subTable"><thead><tr>
+        <th class="num">ID</th><th>User</th><th class="num">Prob</th><th>Lang</th>
+        <th>Verdict</th><th class="num">Score</th><th class="num">Tests</th><th>Graded</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <div id="hints" class="tabpane">
+    <div class="panel">
+      <div class="row-between mb">
+        <h3 style="margin:0">Hints awaiting rating</h3>
+        <div class="btnrow">
+          <label class="small" style="display:flex;align-items:center;gap:6px;margin:0">
+            <input type="checkbox" id="onlyUnrated" checked style="width:auto" onchange="loadHintQueue()"> unrated only</label>
+          <button class="ghost" onclick="loadHintQueue()">Refresh</button>
+        </div>
+      </div>
+      <p class="small muted">Rate each hint on helpfulness and correctness (1–5), and judge
+        whether it reveals the solution. The automated leak flag is shown for comparison —
+        your judgement is what the study uses to validate it.</p>
+      <div id="hintQueue"></div>
+    </div>
+  </div>
+
+  <div id="grading" class="tabpane">
+    <div class="panel">
+      <div class="row-between mb">
+        <h3 style="margin:0">Submissions awaiting human grade</h3>
+        <button class="ghost" onclick="loadGradeQueue()">Refresh</button>
+      </div>
+      <p class="small muted">Assign a score in [0,1]. The autograder's score is hidden until
+        you submit yours, then the delta is shown. Agreement across all graded
+        submissions feeds the kappa/correlation metrics in Research.</p>
+      <div id="gradeQueue"></div>
+    </div>
+  </div>
+
+  <div id="similarity" class="tabpane">
+    <div class="panel">
+      <div class="row-between mb">
+        <div class="btnrow">
+          <select id="simProblem" style="min-width:260px"></select>
+          <button class="primary" onclick="runSimilarity()">Run analysis</button>
+        </div>
+        <span id="simNote" class="kv"></span>
+      </div>
+      <p class="small muted">Combines token-winnowing overlap, Python-AST structure overlap,
+        and TF-IDF cosine into one score per submission pair. Pairs above threshold are
+        listed; connected pairs are grouped into clusters.</p>
+      <div id="simClusters"></div>
+      <div class="table-scroll mt"><table id="simTable"><thead><tr>
+        <th class="num">A</th><th class="num">B</th><th class="num">Combined</th>
+        <th class="num">Winnow</th><th class="num">AST</th><th class="num">TF-IDF</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <div id="research" class="tabpane">
+    <div class="panel">
+      <div class="row-between mb">
+        <h3 style="margin:0">Study summary</h3>
+        <div class="btnrow">
+          <button class="ghost" onclick="loadResearch()">Refresh</button>
+          <button class="primary" onclick="genReports()">Generate CSV / charts</button>
+        </div>
+      </div>
+      <div id="researchBody" class="small muted">Loading…</div>
+      <div id="reportOut"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+if (!CC.requireToken("/")) {}
+init();
+
+async function init() {
+  CC.loadStatusBar("statusbar");
+  try {
+    const me = await CC.api("/api/whoami");
+    if (me.role !== "instructor" && me.role !== "admin") { window.location.href = "/student"; return; }
+    document.getElementById("whoami").innerHTML = `<b>${CC.esc(me.username)}</b> · ${me.role}`;
+  } catch (e) { window.location.href = "/"; return; }
+
+  document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".tabpane").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    document.getElementById(t.dataset.pane).classList.add("active");
+    onTab(t.dataset.pane);
+  }));
+
+  await loadOverview();
+  await populateSimProblems();
+}
+
+function onTab(pane) {
+  if (pane === "submissions") loadSubmissions();
+  else if (pane === "hints") loadHintQueue();
+  else if (pane === "grading") loadGradeQueue();
+  else if (pane === "research") loadResearch();
+}
+
+async function loadOverview() {
+  const d = await CC.api("/api/instructor/overview");
+  const t = d.totals;
+  document.getElementById("tiles").innerHTML = [
+    tile(t.problems, "problems"), tile(t.submissions, "submissions"),
+    tile(t.hints, "hints"), tile(t.hints_rated, "hints rated", "accent"),
+    tile(t.submissions_human_graded, "subs graded", "accent"),
+    tile(t.leaked_hints, "leaked hints", "warnc"),
+    tile(CC.pct(t.leak_rate), "leak rate", "warnc"),
+  ].join("");
+  const tb = document.querySelector("#probTable tbody");
+  tb.innerHTML = d.problems.map(p => `<tr>
+    <td>${CC.esc(p.title)}</td><td class="mono small">${p.language}</td><td>${p.difficulty}</td>
+    <td class="num">${p.n_submissions}</td><td class="num">${p.n_passed}</td>
+    <td class="num">${CC.pct(p.pass_rate)}</td><td class="num">${CC.pct(p.mean_score)}</td></tr>`).join("")
+    || `<tr><td colspan="7" class="muted">No problems yet.</td></tr>`;
+}
+function tile(n, l, cls = "") { return `<div class="tile"><div class="n ${cls}">${n}</div><div class="l">${l}</div></div>`; }
+
+async function loadSubmissions() {
+  const d = await CC.api("/api/instructor/submissions");
+  document.querySelector("#subTable tbody").innerHTML = d.submissions.map(s => `<tr>
+    <td class="num">${s.id}</td><td>${CC.esc(s.user)}</td><td class="num">${s.problem_id}</td>
+    <td class="mono small">${s.language}</td><td>${CC.badge(s.status)}</td>
+    <td class="num">${CC.pct(s.score)}</td><td class="num">${s.passed_count}/${s.total_count}</td>
+    <td>${s.human_graded ? '<span class="badge ok">yes</span>' : '<span class="badge muted">no</span>'}</td>
+  </tr>`).join("") || `<tr><td colspan="8" class="muted">No submissions.</td></tr>`;
+}
+
+async function loadHintQueue() {
+  const only = document.getElementById("onlyUnrated").checked;
+  const d = await CC.api("/api/instructor/hints/queue?only_unrated=" + only);
+  const box = document.getElementById("hintQueue");
+  if (!d.hints.length) { box.innerHTML = '<div class="notice">Nothing in the queue.</div>'; return; }
+  box.innerHTML = d.hints.map(h => hintRateCard(h)).join("");
+}
+
+function hintRateCard(h) {
+  const leak = h.leaked ? `<span class="leak-pill leak">auto: leak ${CC.fx(h.leakage_score,2)}</span>`
+                        : `<span class="leak-pill safe">auto: clean ${CC.fx(h.leakage_score,2)}</span>`;
+  const body = String(h.content).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  return `<div class="hint" id="hc-${h.hint_id}">
+    <div class="meta">
+      <span class="badge ${h.source==='llm'?'info':'muted'}">${h.source}</span>
+      <span>L${h.level}</span><span>${CC.esc(h.problem)}</span>
+      <span>sub #${h.submission_id} · ${h.submission_status}</span>${leak}
+    </div>
+    <div class="body mb">${body}</div>
+    <div class="io-grid">
+      <div><label>helpfulness (1–5)</label><div class="rate-grid" data-k="help" data-h="${h.hint_id}">
+        ${[1,2,3,4,5].map(n=>`<button onclick="pick(${h.hint_id},'help',${n})">${n}</button>`).join("")}</div></div>
+      <div><label>correctness (1–5)</label><div class="rate-grid" data-k="corr" data-h="${h.hint_id}">
+        ${[1,2,3,4,5].map(n=>`<button onclick="pick(${h.hint_id},'corr',${n})">${n}</button>`).join("")}</div></div>
+    </div>
+    <div class="btnrow mt">
+      <label class="small" style="display:flex;align-items:center;gap:6px;margin:0">
+        <input type="checkbox" id="rev-${h.hint_id}" style="width:auto"> reveals the solution</label>
+      <input id="cm-${h.hint_id}" placeholder="optional comment" style="max-width:280px">
+      <button class="primary" onclick="saveRating(${h.hint_id})">Save rating</button>
+      <span id="rs-${h.hint_id}" class="kv"></span>
+    </div>
+  </div>`;
+}
+const PICK = {};
+function pick(id, k, n) {
+  PICK[id] = PICK[id] || {}; PICK[id][k] = n;
+  document.querySelectorAll(`.rate-grid[data-k="${k}"][data-h="${id}"] button`).forEach((b,i)=>
+    b.classList.toggle("sel", i+1===n));
+}
+async function saveRating(id) {
+  const p = PICK[id] || {};
+  if (!p.help || !p.corr) { document.getElementById("rs-"+id).innerHTML =
+    '<span style="color:var(--fail)">pick both scores</span>'; return; }
+  try {
+    await CC.api("/api/hints/rate", { method: "POST", body: {
+      hint_id: id, helpfulness: p.help, correctness: p.corr,
+      reveals_solution: document.getElementById("rev-"+id).checked,
+      comment: document.getElementById("cm-"+id).value }});
+    const card = document.getElementById("hc-"+id);
+    card.style.opacity = 0.55;
+    document.getElementById("rs-"+id).innerHTML = '<span style="color:var(--ok)">saved ✓</span>';
+  } catch (e) { document.getElementById("rs-"+id).innerHTML = `<span style="color:var(--fail)">${CC.esc(e.message)}</span>`; }
+}
+
+async function loadGradeQueue() {
+  const d = await CC.api("/api/instructor/submissions/grade-queue");
+  const box = document.getElementById("gradeQueue");
+  if (!d.submissions.length) { box.innerHTML = '<div class="notice">Nothing to grade.</div>'; return; }
+  box.innerHTML = d.submissions.map(s => `<div class="hint" id="gc-${s.submission_id}">
+    <div class="meta"><span>sub #${s.submission_id}</span><span>${CC.esc(s.user)}</span>
+      <span>problem ${s.problem_id}</span><span class="badge muted">autograder hidden</span></div>
+    <pre class="out mb">${CC.esc(s.source_code)}</pre>
+    <div class="btnrow">
+      <label class="small" style="margin:0">score</label>
+      <input id="sc-${s.submission_id}" type="number" min="0" max="1" step="0.05" value="1.0" style="max-width:110px">
+      <input id="gl-${s.submission_id}" placeholder="label (fail/partial/pass)" style="max-width:200px">
+      <button class="primary" onclick="saveGrade(${s.submission_id})">Submit grade</button>
+      <span id="gr-${s.submission_id}" class="kv"></span>
+    </div>
+  </div>`).join("");
+}
+async function saveGrade(id) {
+  const score = parseFloat(document.getElementById("sc-"+id).value);
+  try {
+    const r = await CC.api("/api/grades", { method: "POST", body: {
+      submission_id: id, score, label: document.getElementById("gl-"+id).value }});
+    document.getElementById("gc-"+id).style.opacity = 0.55;
+    document.getElementById("gr-"+id).innerHTML =
+      `<span style="color:var(--ok)">saved ✓</span> auto=${CC.pct(r.auto_score)} you=${CC.pct(r.human_score)} Δ=${CC.fx(r.delta,2)}`;
+  } catch (e) { document.getElementById("gr-"+id).innerHTML = `<span style="color:var(--fail)">${CC.esc(e.message)}</span>`; }
+}
+
+async function populateSimProblems() {
+  const d = await CC.api("/api/problems");
+  document.getElementById("simProblem").innerHTML = d.problems.map(p =>
+    `<option value="${p.id}">${CC.esc(p.title)} · ${p.language}</option>`).join("");
+}
+async function runSimilarity() {
+  const id = parseInt(document.getElementById("simProblem").value, 10);
+  document.getElementById("simNote").textContent = "running…";
+  try {
+    const d = await CC.api("/api/similarity/problem/" + id, { method: "POST" });
+    document.getElementById("simNote").textContent = `${d.n_submissions} submissions analysed`;
+    document.getElementById("simClusters").innerHTML = d.clusters.length
+      ? "<h3>Clusters</h3>" + d.clusters.map(c =>
+        `<div class="notice mb"><b>cluster</b> (${c.size}) max ${CC.fx(c.max_score,2)} —
+          submissions [${c.members.join(", ")}] · users [${c.member_users.map(u=>CC.esc(u)).join(", ")}]</div>`).join("")
+      : '<div class="muted small">No clusters above threshold.</div>';
+    document.querySelector("#simTable tbody").innerHTML = d.pairs.map(p => `<tr>
+      <td class="num">${p.a_submission}</td><td class="num">${p.b_submission}</td>
+      <td class="num"><b style="color:${p.combined>=0.55?'var(--fail)':p.combined>=0.4?'var(--warn)':'var(--text)'}">${CC.fx(p.combined,3)}</b></td>
+      <td class="num">${CC.fx(p.winnow,3)}</td><td class="num">${p.ast==null?'—':CC.fx(p.ast,3)}</td>
+      <td class="num">${CC.fx(p.tfidf,3)}</td></tr>`).join("")
+      || `<tr><td colspan="6" class="muted">No pairs above threshold.</td></tr>`;
+  } catch (e) { document.getElementById("simNote").innerHTML = `<span style="color:var(--fail)">${CC.esc(e.message)}</span>`; }
+}
+
+async function loadResearch() {
+  const body = document.getElementById("researchBody");
+  try {
+    const d = await CC.api("/api/research/summary");
+    const g = d.grading_agreement, l = d.leak_agreement;
+    let html = "";
+    html += `<h3>Hint quality by source</h3><div class="table-scroll"><table><thead><tr>
+      <th>Source</th><th class="num">n</th><th class="num">Helpfulness</th>
+      <th class="num">Correctness</th><th class="num">Leak rate</th><th class="num">Human reveals</th>
+      </tr></thead><tbody>${d.hint_quality_by_source.map(s=>`<tr>
+        <td><span class="badge ${s.source==='llm'?'info':'muted'}">${s.source}</span></td>
+        <td class="num">${s.n}</td><td class="num">${CC.fx(s.helpfulness_mean,2)} ±${CC.fx(s.helpfulness_std,2)}</td>
+        <td class="num">${CC.fx(s.correctness_mean,2)} ±${CC.fx(s.correctness_std,2)}</td>
+        <td class="num">${CC.pct(s.leak_rate)}</td>
+        <td class="num">${s.reveals_rate==null?'—':CC.pct(s.reveals_rate)}</td></tr>`).join("")
+        || `<tr><td colspan="6" class="muted">No rated hints yet.</td></tr>`}</tbody></table></div>`;
+
+    if (d.llm_vs_baseline && (d.llm_vs_baseline.helpfulness || d.llm_vs_baseline.correctness)) {
+      const e = d.llm_vs_baseline;
+      html += `<h3 class="mt">LLM vs baseline (effect size)</h3><div class="kv">`;
+      if (e.helpfulness) html += `helpfulness: llm <b>${CC.fx(e.helpfulness.llm_mean,2)}</b> vs baseline <b>${CC.fx(e.helpfulness.baseline_mean,2)}</b> · Cliff's δ <b>${CC.fx(e.helpfulness.cliffs_delta,2)}</b><br>`;
+      if (e.correctness) html += `correctness: llm <b>${CC.fx(e.correctness.llm_mean,2)}</b> vs baseline <b>${CC.fx(e.correctness.baseline_mean,2)}</b> · Cliff's δ <b>${CC.fx(e.correctness.cliffs_delta,2)}</b>`;
+      html += `</div>`;
+    }
+
+    html += `<h3 class="mt">Autograder vs human grading</h3><div class="kv">
+      n=<b>${g.n}</b> · exact bucket <b>${CC.pct(g.exact_bucket)}</b> · adjacent <b>${CC.pct(g.adjacent_bucket)}</b><br>
+      Cohen's κ (unweighted) <b>${CC.fx(g.kappa_unweighted)}</b> · κ (weighted) <b>${CC.fx(g.kappa_weighted)}</b><br>
+      Pearson r <b>${CC.fx(g.pearson)}</b> · Spearman ρ <b>${CC.fx(g.spearman)}</b> · MAE <b>${CC.fx(g.mae_score)}</b></div>`;
+
+    html += `<h3 class="mt">Leak flag vs human judgement</h3><div class="kv">
+      n=<b>${l.n}</b> · auto leak rate <b>${CC.pct(l.auto_leak_rate)}</b> · human reveal rate <b>${CC.pct(l.human_reveal_rate)}</b><br>
+      agreement <b>${CC.pct(l.agreement)}</b> · Cohen's κ <b>${CC.fx(l.kappa)}</b></div>`;
+
+    body.classList.remove("muted");
+    body.innerHTML = html;
+  } catch (e) { body.innerHTML = `<div class="notice err">${CC.esc(e.message)}</div>`; }
+}
+
+async function genReports() {
+  const out = document.getElementById("reportOut");
+  out.innerHTML = '<div class="notice mt">Generating…</div>';
+  try {
+    const d = await CC.api("/api/research/reports", { method: "POST" });
+    out.innerHTML = `<div class="notice mt"><b>Wrote ${d.csv_files.length} CSV file(s)</b>` +
+      (d.charts_enabled ? ` and ${d.charts.length} chart(s)` : " (charts skipped — matplotlib not installed)") +
+      `<pre class="out mt">${CC.esc((d.csv_files.concat(d.charts)).join("\n"))}</pre>` +
+      `<pre class="out">${CC.esc(d.summary_text)}</pre></div>`;
+  } catch (e) { out.innerHTML = `<div class="notice err mt">${CC.esc(e.message)}</div>`; }
+}
+</script>
+</body>
+</html>

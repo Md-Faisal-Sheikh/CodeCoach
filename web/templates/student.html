@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCoach — Workspace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="statusbar" id="statusbar"><span class="brand">code<b>coach</b></span></div>
+
+<div class="wrap">
+  <div class="row-between mb">
+    <div class="btnrow">
+      <select id="problemSel" style="min-width:280px" onchange="loadProblem()"></select>
+      <span id="diff" class="kv"></span>
+    </div>
+    <div class="btnrow">
+      <span id="whoami" class="kv"></span>
+      <a class="btn ghost" href="/">Sign out</a>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- left: problem -->
+    <div>
+      <div class="panel">
+        <div class="split-head">
+          <h2 id="ptitle">—</h2>
+          <span id="plang" class="badge info"></span>
+        </div>
+        <div id="pstatement" class="statement small muted">Select a problem to begin.</div>
+        <hr class="sep">
+        <h3>Sample tests</h3>
+        <div id="samples" class="small muted">—</div>
+      </div>
+    </div>
+
+    <!-- right: editor + results -->
+    <div>
+      <div class="panel">
+        <div class="row-between mb">
+          <h3 style="margin:0">Your solution</h3>
+          <span id="langhint" class="kv"></span>
+        </div>
+        <textarea id="code" class="code" spellcheck="false" placeholder="# write your solution here"></textarea>
+        <div class="btnrow mt">
+          <button class="primary" id="runBtn" onclick="submit()">Submit &amp; grade</button>
+          <button class="ghost" onclick="resetCode()">Reset</button>
+          <span id="subnote" class="kv"></span>
+        </div>
+      </div>
+
+      <div class="panel" id="resultPanel" style="display:none">
+        <div class="row-between">
+          <h3 style="margin:0">Result</h3>
+          <span id="overall"></span>
+        </div>
+        <div id="strip"></div>
+        <div id="compile"></div>
+        <div id="ioview"></div>
+
+        <hr class="sep">
+        <div class="row-between mb">
+          <h3 style="margin:0">Help</h3>
+          <div class="btnrow">
+            <button onclick="getHint()" id="hintBtn">Get a hint</button>
+            <button class="ghost" onclick="getBaseline()">Show raw error</button>
+            <button class="ghost" onclick="getFeedback()">Overall feedback</button>
+          </div>
+        </div>
+        <div class="kv mb" id="hintlevel"></div>
+        <div id="hints"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+if (!CC.requireToken("/")) { }
+let STATE = { problem: null, submission: null, hintLevel: 0, maxHint: 3 };
+
+init();
+async function init() {
+  CC.loadStatusBar("statusbar");
+  try {
+    const me = await CC.api("/api/whoami");
+    document.getElementById("whoami").innerHTML = `<b>${CC.esc(me.username)}</b> · ${me.role}`;
+  } catch (e) { window.location.href = "/"; return; }
+  await loadProblems();
+}
+
+async function loadProblems() {
+  const data = await CC.api("/api/problems");
+  const sel = document.getElementById("problemSel");
+  sel.innerHTML = data.problems.map(p =>
+    `<option value="${p.id}">${CC.esc(p.title)} · ${p.language} · ${p.difficulty}</option>`).join("");
+  if (data.problems.length) await loadProblem();
+}
+
+function starter(lang) {
+  if (lang === "python") return "import sys\n\ndef main():\n    data = sys.stdin.read().split()\n    # ...\n\nmain()\n";
+  if (lang === "c") return "#include <stdio.h>\nint main(void){\n    return 0;\n}\n";
+  if (lang === "cpp") return "#include <bits/stdc++.h>\nusing namespace std;\nint main(){\n    return 0;\n}\n";
+  if (lang === "javascript") return "const data = require('fs').readFileSync(0,'utf8').split(/\\s+/);\n";
+  if (lang === "java") return "import java.util.*;\npublic class Main {\n  public static void main(String[] a){\n  }\n}\n";
+  return "";
+}
+
+async function loadProblem() {
+  const id = parseInt(document.getElementById("problemSel").value, 10);
+  const p = await CC.api("/api/problems/" + id);
+  STATE.problem = p; STATE.maxHint = p.max_hint_level; STATE.submission = null; STATE.hintLevel = 0;
+  document.getElementById("ptitle").textContent = p.title;
+  document.getElementById("plang").textContent = p.language;
+  document.getElementById("pstatement").classList.remove("muted");
+  document.getElementById("pstatement").textContent = p.statement || "(no statement)";
+  document.getElementById("diff").innerHTML = `<b>${p.difficulty}</b> · ${p.tags || "untagged"}`;
+  document.getElementById("langhint").textContent = p.language + " · " +
+    p.time_limit_ms + "ms · " + p.memory_limit_mb + "MB";
+  const samples = (p.tests || []).filter(t => !t.hidden);
+  document.getElementById("samples").innerHTML = samples.length ? samples.map((t, i) =>
+    `<div class="mb"><div class="kv">sample ${i + 1} — ${CC.esc(t.name)}</div>
+      <div class="io-grid">
+        <div><label>stdin</label><pre class="out">${CC.esc(t.stdin) || "(empty)"}</pre></div>
+        <div><label>expected</label><pre class="out">${CC.esc(t.expected_stdout)}</pre></div>
+      </div></div>`).join("") :
+    '<span class="muted">All tests are hidden for this problem.</span>';
+  document.getElementById("code").value = starter(p.language);
+  document.getElementById("resultPanel").style.display = "none";
+  document.getElementById("hints").innerHTML = "";
+  document.getElementById("subnote").textContent = "";
+}
+
+function resetCode() { if (STATE.problem) document.getElementById("code").value = starter(STATE.problem.language); }
+
+async function submit() {
+  if (!STATE.problem) return;
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true; btn.textContent = "Grading…";
+  document.getElementById("subnote").textContent = "";
+  try {
+    const sub = await CC.api("/api/submissions", { method: "POST",
+      body: { problem_id: STATE.problem.id, source_code: document.getElementById("code").value } });
+    STATE.submission = sub; STATE.hintLevel = 0;
+    renderResult(sub);
+  } catch (e) {
+    document.getElementById("subnote").innerHTML = `<span style="color:var(--fail)">${CC.esc(e.message)}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "Submit & grade";
+  }
+}
+
+function renderResult(sub) {
+  document.getElementById("resultPanel").style.display = "block";
+  const passed = sub.status === "OK";
+  document.getElementById("overall").innerHTML =
+    `${CC.badge(sub.status)} <span class="kv">${sub.passed_count}/${sub.total_count} tests · ` +
+    `score ${CC.pct(sub.score)} · ${sub.runtime_ms}ms · ${Math.round(sub.memory_kb/1024)}MB</span>`;
+  document.getElementById("strip").innerHTML = CC.verdictStrip(sub.outcomes);
+
+  const comp = document.getElementById("compile");
+  if (sub.status === "CE" && sub.compile_log) {
+    comp.innerHTML = `<label>compiler output</label><pre class="out">${CC.esc(sub.compile_log)}</pre>`;
+  } else { comp.innerHTML = ""; }
+
+  // show first failing visible test I/O
+  const fail = (sub.outcomes || []).find(o => !o.passed && !o.hidden);
+  const io = document.getElementById("ioview");
+  if (fail && (fail.stdout_excerpt || fail.stderr_excerpt)) {
+    io.innerHTML = `<div class="mt"><div class="kv mb">first failing visible test — ${CC.esc(fail.name)} (${fail.status})</div>
+      <div class="io-grid">
+        <div><label>your stdout</label><pre class="out">${CC.esc(fail.stdout_excerpt) || "(none)"}</pre></div>
+        <div><label>stderr</label><pre class="out">${CC.esc(fail.stderr_excerpt) || "(none)"}</pre></div>
+      </div></div>`;
+  } else { io.innerHTML = ""; }
+
+  document.getElementById("hintBtn").disabled = passed;
+  document.getElementById("hintlevel").textContent = passed
+    ? "All tests pass — no hint needed."
+    : `Progressive hints available: level 0/${STATE.maxHint}`;
+  document.getElementById("hints").innerHTML = "";
+}
+
+function hintCard(h) {
+  const cls = h.source === "baseline" ? "baseline" : (h.source === "heuristic" ? "heuristic" : "");
+  const lvl = h.level ? `L${h.level}` : "feedback";
+  const body = renderHintBody(h.content);
+  return `<div class="hint ${cls}">
+    <div class="meta"><span class="badge ${h.source==='llm'?'info':'muted'}">${h.source}</span>
+      <span>${lvl}</span>${h.model ? `<span>${CC.esc(h.model)}</span>` : ""}</div>
+    <div class="body">${body}</div></div>`;
+}
+function renderHintBody(text) {
+  // render fenced code blocks as <pre>, escape everything
+  const parts = String(text).split(/```[a-zA-Z0-9_+-]*\n?/);
+  let html = "", code = false;
+  for (const p of parts) { html += code ? `<pre>${CC.esc(p)}</pre>` : CC.esc(p); code = !code; }
+  return html;
+}
+
+async function getHint() {
+  if (!STATE.submission || STATE.submission.status === "OK") return;
+  if (STATE.hintLevel >= STATE.maxHint) {
+    document.getElementById("hintlevel").textContent = `Reached max hint level (${STATE.maxHint}).`;
+    return;
+  }
+  const btn = document.getElementById("hintBtn"); btn.disabled = true; btn.textContent = "Thinking…";
+  try {
+    const nextLevel = STATE.hintLevel + 1;
+    const h = await CC.api("/api/hints", { method: "POST",
+      body: { submission_id: STATE.submission.id, level: nextLevel } });
+    STATE.hintLevel = h.level;
+    document.getElementById("hints").insertAdjacentHTML("beforeend", hintCard(h));
+    document.getElementById("hintlevel").textContent = `level ${STATE.hintLevel}/${STATE.maxHint}` +
+      (STATE.hintLevel >= STATE.maxHint ? " (max)" : "");
+  } catch (e) {
+    document.getElementById("hints").insertAdjacentHTML("beforeend",
+      `<div class="notice err">${CC.esc(e.message)}</div>`);
+  } finally {
+    btn.disabled = STATE.hintLevel >= STATE.maxHint; btn.textContent = "Get a hint";
+  }
+}
+
+async function getBaseline() {
+  if (!STATE.submission) return;
+  try {
+    const h = await CC.api("/api/hints/baseline", { method: "POST",
+      body: { submission_id: STATE.submission.id, level: 0 } });
+    document.getElementById("hints").insertAdjacentHTML("beforeend", hintCard(h));
+  } catch (e) {
+    document.getElementById("hints").insertAdjacentHTML("beforeend",
+      `<div class="notice err">${CC.esc(e.message)}</div>`);
+  }
+}
+
+async function getFeedback() {
+  if (!STATE.submission) return;
+  try {
+    const h = await CC.api("/api/hints/feedback", { method: "POST",
+      body: { submission_id: STATE.submission.id } });
+    document.getElementById("hints").insertAdjacentHTML("beforeend", hintCard(h));
+  } catch (e) {
+    document.getElementById("hints").insertAdjacentHTML("beforeend",
+      `<div class="notice err">${CC.esc(e.message)}</div>`);
+  }
+}
+</script>
+</body>
+</html>
